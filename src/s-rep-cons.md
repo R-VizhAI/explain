@@ -1,20 +1,23 @@
-# 🧭 Overview — What This Repo Does
+# 🧭 What This Project Does
 
-This project is a **serverless backend** that automatically **creates interview reports** whenever a new interview event happens.
+This project is a **serverless backend** that automatically **creates interview reports** when an interview is finished.
 
-It’s part of a bigger system where one service sends messages (the _producer_), and this repo listens for them (the _consumer_).
+It’s part of a bigger system made of two parts:
 
-When an interview is completed, a message gets dropped into a “mailbox” on Azure called a **Service Bus Queue**.  
-This consumer receives that message, looks up the interview details from a database (Supabase), processes the answers, calculates results, saves the report, and marks the job as complete.
+* The **Producer** — sends messages when something happens.
+* The **Consumer** (this project) — listens for those messages and does the work.
 
-In plain terms:
+When an interview is done, the producer drops a message into a mailbox on Azure called a **Service Bus Queue**.
+This consumer gets that message, looks up interview details in the database (Supabase), checks the answers, calculates the score, saves the report, and marks the work as done.
 
-> The _producer_ says: “Hey, interview X is done!”  
-> The _consumer_ says: “Got it. I’ll make a report for interview X now.”
+In simple terms:
+
+> The producer says: “Interview X just finished!”
+> The consumer replies: “Okay, I’ll make the report for Interview X.”
 
 ---
 
-# 🏗 How the Repo Is Structured
+# 🏗 How the Project Is Organized
 
 ```
 src/
@@ -28,178 +31,158 @@ src/
       └── technicalReportConsumer/
  └── shared/
       ├── db/
-        └──── connection.ts
-        └──── supabase.ts/
-        ......
       ├── types/
       └── utils/
 ```
 
-Each folder under `functions/` represents a **different task** the system can perform — each one is an independent “mini worker.”  
-All of them are loaded through `src/index.ts`.
+Each folder inside `functions/` is a different small worker (function) that does a specific type of report.
+All of them are registered in `src/index.ts`, so Azure knows about them.
 
 ---
 
-# 📄 `src/index.ts` — The Entry Point
+# 📄 `src/index.ts` — The Starting Point
 
-This file is like a **directory of workers**.  
-It doesn’t do any heavy lifting itself — it just _registers_ each worker (function) so that Azure knows what jobs exist.
+This file doesn’t do any processing itself.
+It just **registers all the workers** so Azure can trigger them when new messages arrive.
 
 In plain English:
 
-> “Hey Azure, here are all the workers you can call — one for one-way interview reports, one for coding interviews, one for technical interviews, and so on.”
+> “Azure, here are my workers. Call them whenever a message comes in.”
 
-It also logs a message to confirm everything loaded correctly.
+It also prints a log message to confirm everything is loaded.
 
 ---
 
-# 📄 `src/functions/oneWayReportConsumer/index.js` — The Worker
+# 📄 `src/functions/oneWayReportConsumer/index.js` — The Worker That Builds Reports
 
-This is one of those workers — the **One Way Report Consumer**.  
-Here’s the story of what it does:
+This is one of the workers — it handles reports for “one-way” interviews.
+
+Here’s what happens step by step:
 
 1. **Waits for a message**
-    
-    - It listens to an Azure mailbox (Service Bus Queue).
-        
-    - When a new message arrives, Azure automatically wakes this function up.
-        
-2. **Reads what the message says**
-    
-    - The message usually looks like:  
-        `{ "interviewId": "...", "eventId": "..." }`
-        
-    - It means “Generate a report for this interview.”
-        
-3. **Finds interview info**
-    
-    - It looks up which organization and candidate this interview belongs to in the database.
-        
+
+   * It listens to the Azure Service Bus Queue.
+   * When a message appears, Azure runs this function automatically.
+
+2. **Reads the message**
+
+   * The message looks like this:
+
+     ```
+     { "interviewId": "...", "eventId": "..." }
+     ```
+   * It basically says: “Please generate a report for this interview.”
+
+3. **Finds interview details**
+
+   * It checks the database to find which organization and candidate the interview belongs to.
+
 4. **Fetches data**
-    
-    - Gets all the questions that were asked.
-        
-    - Gets all the answers the candidate gave.
-        
-5. **Compares answers**
-    
-    - Checks which answers were correct.
-        
-    - Calculates how many were right/wrong.
-        
-    - Gives a score and a simple “recommended / not recommended” verdict.
-        
+
+   * Gets the list of questions that were asked.
+   * Gets all the candidate’s answers.
+
+5. **Checks answers**
+
+   * Compares each answer with the correct one.
+   * Counts how many are correct and wrong.
+   * Calculates a total score and decides if the candidate is “recommended” or “not recommended.”
+
 6. **Saves the report**
-    
-    - Writes all this information back into the database as a report record.
-        
-7. **Marks the job done**
-    
-    - Updates the original “event” as “completed” or “failed,” depending on success.
-        
-8. **Logs everything**
-    
-    - Throughout the process, it logs messages for debugging and tracking.
-        
+
+   * Puts the full result into the database.
+
+7. **Marks the event**
+
+   * Updates the original event record to show the job is completed or failed.
+
+8. **Logs activity**
+
+   * Writes messages to logs for tracking and debugging.
 
 In short:
 
-> “When an interview ends, I’ll grab the questions and answers, check how the candidate did, make a report, save it, and tell the system I’m done.”
+> “When a message comes in, I’ll grab the interview data, check answers, make a report, save it, and mark it done.”
 
 ---
 
-# 🧠 Big Picture of the Flow
+# 🧠 The Whole Workflow (Big Picture)
 
-1. The **Producer** finishes an interview → sends a message (“Interview X done”) to the queue.
-    
-2. The **Service Bus Queue** holds that message temporarily.
-    
-3. The **Consumer (this repo)** picks it up, processes it, and generates the report.
-    
-4. The **Database (Supabase)** stores all the interview data and reports.
-    
-5. The **System** marks that event as “completed.”
-    
+1. **Producer** finishes an interview → sends a message (“Interview X done”) to the Azure queue.
+2. **Service Bus Queue** holds that message.
+3. **Consumer (this repo)** picks it up, processes it, and creates the report.
+4. **Supabase Database** stores all the questions, answers, and results.
+5. **Event status** gets updated to “completed” or “failed.”
 
-So it’s a simple message-driven workflow:
+So the simple flow is:
 
-> Producer → Azure Queue → Consumer → Database → Status Updated
-
-
-
-# 📦 `shared/db/supabase.ts` — The Database Helper
-
-This file is a **helper module** that lets all the consumer functions talk to the **Supabase database**.
-It hides all the complicated database logic behind a few easy-to-call functions.
-
-In plain English:
-
-> “If a worker needs to find interview info or update an event status, it comes here to ask Supabase.”
+> Producer → Azure Queue → Consumer → Supabase → Status Updated
 
 ---
 
-## 🧠 What It Does
+# 📦 `shared/db/supabase.ts` — Helper for Talking to the Database
 
-This file defines two main functions that the consumer services use:
+This file is a helper that makes it easy for the workers to use the Supabase database.
+
+In short:
+
+> “If a worker needs to look up interview info or update a job status, it comes here.”
+
+---
+
+## 🧩 What It Contains
 
 ### 1. `getOrganisationInterviewId(interviewContextId)`
 
 **Purpose:**
-Finds the organization and candidate linked to a given interview.
+Finds which organization and candidate an interview belongs to.
 
 **Story version:**
 
-> “Given an interview ID, go into the database and tell me which organization and candidate this interview belongs to.”
+> “Given this interview ID, tell me who it belongs to.”
 
 **What it does:**
 
-* Creates a Supabase client (a connection to the database).
-* Looks in the `interview_context` table for the record with that ID.
-* Returns the organization interview ID and user ID.
-* If anything fails, logs an error and returns `null`.
-
-**Why it matters:**
-The consumers need this info to know *which* interview data to fetch for report generation.
+* Connects to the Supabase database.
+* Looks inside the `interview_context` table for that ID.
+* Returns the organization and candidate IDs.
+* Logs an error and returns nothing if something goes wrong.
 
 ---
 
 ### 2. `updateInterviewReportEventStatus(eventId, status, message)`
 
 **Purpose:**
-Marks the current report processing job as `completed`, `failed`, or `in progress`.
+Updates the job’s status in the database (for example: completed, failed, etc.).
 
 **Story version:**
 
-> “After I finish (or fail) processing an interview, update the database to show what happened.”
+> “After finishing (or failing) the report, record what happened.”
 
 **What it does:**
 
 * Connects to Supabase.
 * Updates the `interview_report_event` table.
-* Sets the `status` (e.g., completed/failed) and a short `processing_msg` explaining what happened.
-* Logs whether it worked or failed.
-
-**Why it matters:**
-This is how the system keeps track of which interviews are done and which ones failed — it’s part of the reporting lifecycle.
+* Sets the `status` and a short message.
+* Logs success or failure.
 
 ---
 
-## ⚙️ Supporting Function (Not Shown)
+## ⚙️ One More Hidden Helper
 
-This file also imports a helper called `createSupabaseClient()` from `connection.js`.
-That function is responsible for **actually creating the Supabase connection** — likely using an API key and URL from environment variables.
+This file also uses `createSupabaseClient()` from `connection.js`.
+That small function just connects to Supabase using secret keys stored in environment variables.
 
 ---
 
-## 🧩 How It Fits into the Whole System
+## 🔗 How It All Connects
 
-When the consumer (like `oneWayReportConsumer`) runs:
+When `oneWayReportConsumer` runs:
 
-1. It calls `getOrganisationInterviewId()` → to know which data to fetch.
-2. After processing, it calls `updateInterviewReportEventStatus()` → to mark the job done or failed.
+1. It first calls `getOrganisationInterviewId()` to find the related organization and candidate.
+2. Then it processes everything.
+3. Finally, it calls `updateInterviewReportEventStatus()` to mark the job as done.
 
-In other words:
+So the whole story is:
 
-> “Start by asking Supabase who this interview belongs to.
-> Do your processing.
-> Then tell Supabase you’re done.”
+> “Ask the database who this interview belongs to → do the report → tell the database you’re done.”
